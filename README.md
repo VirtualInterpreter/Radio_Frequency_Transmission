@@ -18,7 +18,7 @@ It is designed for transmitting a small amount of data, whilst using only a smal
 * Connect the VCC to the 5V Pin on your device
 * Connect the Data pin to the Pin on your device you want to transmit from.
 
-### The reciever: (XD-RF-5V aka the four pins one)
+### The reciever: (XD-RF-5V aka The four pins one)
 
 * Whilst the reciever has four pins you only need to use three. (Either of the data pins can be chosen)
 * Connect the Ground (GND) to the Ground on your device.
@@ -46,7 +46,7 @@ It is designed for transmitting a small amount of data, whilst using only a smal
   * (20xH, 20xL, 20xH, 1xL), (2xL, 2xH, 2xL, 2xH, (1xL, 12xH, 1xL))x3 
 
 
-## Links you might find useful
+## Links you might find useful (I have no affiliation with these external sites)
 * [RC-Switch](https://github.com/sui77/rc-switch)
 * [Project using RC-Switch](https://sites.google.com/site/summerfuelrobots/arduino-sensor-tutorials/rf-wireless-transmitter-receiver-module-433mhz-for-arduino)
 
