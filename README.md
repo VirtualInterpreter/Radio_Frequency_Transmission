@@ -47,7 +47,7 @@ It is designed for transmitting a small amount of data, whilst using only a smal
 
 
 ## Links you might find useful
-[RC-Switch](https://github.com/sui77/rc-switch)
-[Project using RC-Switch](https://sites.google.com/site/summerfuelrobots/arduino-sensor-tutorials/rf-wireless-transmitter-receiver-module-433mhz-for-arduino)
+* [RC-Switch](https://github.com/sui77/rc-switch)
+* [Project using RC-Switch](https://sites.google.com/site/summerfuelrobots/arduino-sensor-tutorials/rf-wireless-transmitter-receiver-module-433mhz-for-arduino)
 
 # Copyright (c) 2017 Martin Birch.  All right reserved.
