@@ -1,21 +1,20 @@
 /**
  * Copyright (c) 2017 Martin Birch.  All right reserved.
+ * Needs at least 35 Bytes of RAM
 */
 #include "RF_Reciever.h"
 #include "Arduino.h"
 
-volatile uint16_t RF_Reciever::dataRecieved[36];
-volatile uint8_t RF_Reciever::positionInArray = 0;
-volatile long RF_Reciever::lastPeak = 0;
-volatile bool RF_Reciever::startSignalRecieved = false;
-volatile uint8_t RF_Reciever::startBitCounter = 0;
-volatile uint8_t RF_Reciever::transmissionPartCounter = 0;
-
-volatile uint8_t RF_Reciever::byteRecieved;
-volatile bool RF_Reciever::hasByte = false;
-
+volatile uint32_t RF_Reciever::dataRecieved[3];
 volatile uint8_t RF_Reciever::recievePin = 0;
-volatile uint16_t RF_Reciever::transmit_time =  500;
+volatile uint8_t RF_Reciever::transmit_time =  150;
+volatile long RF_Reciever::lastPeak = 0;
+
+volatile data_properties RF_Reciever::d_properties = { setAll: 0 };
+volatile transmission_properties RF_Reciever::t_properties = { setAll: 0 };
+volatile transmission_progress RF_Reciever::t_progress = { setAll: 0 };
+
+volatile uint8_t RF_Reciever::t_bitCounter = 0;
 
 RF_Reciever::RF_Reciever() { }
 
@@ -32,9 +31,6 @@ void RF_Reciever::setRecievingPin(const uint8_t pin) {
 * Starts listening for inputs
 * For more information about known usable pins,
 * please see the documentation of the class.
-*
-* When using the digispark replace the line in the method with:
-* attachInterrupt(RF_Reciever::recievePin, recieve, CHANGE);
 */
 void RF_Reciever::startListening() {
   #if defined( __AVR_ATtinyX5__ )
@@ -46,9 +42,6 @@ void RF_Reciever::startListening() {
 
 /**
 * Stop listening for inputs
-*
-* When using the digispark replace the line in the method with:
-* detachInterrupt(RF_Reciever::recievePin);
 */
 void RF_Reciever::stopListening() {
   #if defined( __AVR_ATtinyX5__ )
@@ -58,69 +51,43 @@ void RF_Reciever::stopListening() {
   #endif
 }
 
-/**
-* This tests whether the peak detected is a end peak.
-* This does not necessarily mean that the transimission has ended.
-* @param peakLength The Time in Microseconds since the last peak and this one
-*/
-bool RF_Reciever::isEndSignal(const uint16_t & peakLength) {
-  return peakLength > 11 * RF_Reciever::transmit_time;
+bool RF_Reciever::hasByte() const {
+  return RF_Reciever::d_properties.hasData && RF_Reciever::d_properties.data_type == data_byte;
 }
 
-/**
-* Called at the end of a transmission to read
-* what was transmitted. This method works by reading
-* the peaks on the stack.
-*/
-uint8_t RF_Reciever::processByteRecieved() {
-  uint8_t bytesRecieved[3];
+bool RF_Reciever::hasInt() const {
+  return RF_Reciever::d_properties.hasData && RF_Reciever::d_properties.data_type == data_int;
+}
 
-  uint8_t byteDone = 0;
-  for (uint8_t i = 0; i < 3; ++i) {
-    --RF_Reciever::positionInArray; // Removed High Part of End Peak, it's not informative
-    bytesRecieved[byteDone] = 0; // Reset Byte
+bool RF_Reciever::hasLong() const {
+  return RF_Reciever::d_properties.hasData && RF_Reciever::d_properties.data_type == data_long;
+}
 
-    uint8_t bitsDone = 0; // Counter for the amount of bits in the byte formed
-    uint8_t peakLength = RF_Reciever::dataRecieved[RF_Reciever::positionInArray - 1] / RF_Reciever::transmit_time;
-    bitsDone = peakLength - 1; // 1 bit used in First Part of End Peak Signal
+uint8_t RF_Reciever::getByteAndRemove() {
+  RF_Reciever::d_properties.setAll = 0;
+  return (uint8_t) RF_Reciever::dataRecieved[RF_Reciever::d_properties.validDataIndex];
+}
 
-    --RF_Reciever::positionInArray; // Pop the item off the top of the stack
-
-    bool isHigh = false; // Specifies if the bit being processed is a HIGH or LOW signal
-    uint8_t escapeAfter = 0; // Number specific for transmitting data of size 8 i.e. a byte (to prevent infinte loop)
-    while (bitsDone < 8 && escapeAfter < 14) {
-      if (RF_Reciever::positionInArray > 0) {
-
-        isHigh = !isHigh;
-        peakLength = RF_Reciever::dataRecieved[RF_Reciever::positionInArray - 1] / RF_Reciever::transmit_time;
-        --RF_Reciever::positionInArray;
-
-        if (isHigh) {
-          for (uint8_t i = 0; (i < peakLength) && (bitsDone < 8); ++i) {
-            if (bitsDone == 0) {
-              bytesRecieved[byteDone] = 1;
-            } else {
-              bytesRecieved[byteDone] |= 1 << (bitsDone);
-            }
-            ++bitsDone;
-          }
-        } else {
-          bitsDone += peakLength;
-        }
-      }
-      ++escapeAfter;
+unsigned int RF_Reciever::getIntAndRemove() {
+  int number = 0;
+  for (uint8_t i = 15; i >= 0 && i < 255; --i) {
+    if ((RF_Reciever::dataRecieved[RF_Reciever::d_properties.validDataIndex] >> i) & 1) {
+      number |= 1 << i;
     }
-    ++byteDone;
   }
+  RF_Reciever::d_properties.setAll = 0;
+  return (unsigned int) RF_Reciever::dataRecieved[RF_Reciever::d_properties.validDataIndex];
+}
 
-  if (!hasIntegrity(bytesRecieved)) {
-    RF_Reciever::hasByte = false;
-    RF_Reciever::byteRecieved = 0;
-  } else {
-    RF_Reciever::hasByte = true;
+unsigned long RF_Reciever::getLongAndRemove() {
+  long number = 0;
+  for (uint8_t i = 31; i >= 0 && i < 255; --i) {
+    if ((RF_Reciever::dataRecieved[RF_Reciever::d_properties.validDataIndex] >> i) & 1) {
+      number |= 1 << i;
+    }
   }
-
-  return RF_Reciever::byteRecieved;
+  RF_Reciever::d_properties.setAll = 0;
+  return number;
 }
 
 /**
@@ -128,35 +95,18 @@ uint8_t RF_Reciever::processByteRecieved() {
 * During the transmission the byte sent is repeated an
 * odd number of times. If there is only one malformed byte
 * then the transmission is considered a success.
-* @param bytes A pointer to the array of decoded bytes
 */
-bool RF_Reciever::hasIntegrity(const uint8_t * bytes) {
-  RF_Reciever::hasByte = false;
-  uint8_t integrityErrors = 0;
+bool RF_Reciever::hasIntegrity() {
+  RF_Reciever::d_properties.hasData = false;
 
-  for (uint8_t i = 1; i < 3; ++i) {
-    if (*bytes != *(bytes + i)) {
-      ++integrityErrors;
-    } else {
-      RF_Reciever::byteRecieved = *(bytes + i);
-    }
+  if (RF_Reciever::t_properties.reliability == t_safe) {
+    return (RF_Reciever::dataRecieved[0] == RF_Reciever::dataRecieved[1]) ||
+      (RF_Reciever::dataRecieved[1] == RF_Reciever::dataRecieved[2]) ||
+      (RF_Reciever::dataRecieved[0] == RF_Reciever::dataRecieved[2]);
+  } else {
+    return true;
   }
 
-  if (integrityErrors > 1) {
-    integrityErrors = 0;
-    if (*(bytes) != *(bytes + 2)) {
-      ++integrityErrors;
-    }
-    for (uint8_t i = 2; i < 3; ++i) {
-      if (*(bytes + 1) != *(bytes + i)) {
-        ++integrityErrors;
-      } else {
-        RF_Reciever::byteRecieved = *(bytes + i);
-      }
-    }
-  }
-
-  return integrityErrors <= 1;
 }
 
 /**
@@ -166,22 +116,29 @@ bool RF_Reciever::hasIntegrity(const uint8_t * bytes) {
 void RF_Reciever::processingStartSignal(const uint16_t & timeSinceLastPeak) {
   // Begin Part if transmission
 
-  if (RF_Reciever::startBitCounter == 0) {
+  if (RF_Reciever::t_bitCounter == 0) {
     // First Part of begin signal check it is high
-    if (digitalRead(recievePin) == HIGH) {
-      ++RF_Reciever::startBitCounter;
+    if (digitalRead(RF_Reciever::recievePin) == HIGH) {
+      ++RF_Reciever::t_bitCounter;
     }
   } else {
-    if (timeSinceLastPeak > 9750) { // 500us transmission time * 20 bits - 250 delay factor
-      ++RF_Reciever::startBitCounter;
+    if (timeSinceLastPeak > RF_Reciever::transmit_time * 64) {
+      ++RF_Reciever::t_bitCounter;
 
-      if (RF_Reciever::startBitCounter == 4) {
-        RF_Reciever::startSignalRecieved = true;
-        RF_Reciever::dataRecieved[RF_Reciever::positionInArray++] = timeSinceLastPeak;
+      if (RF_Reciever::t_bitCounter == 4) {
+        RF_Reciever::t_progress.setAll = 0;
+        RF_Reciever::t_progress.hasStartSignal = true;
+        RF_Reciever::d_properties.setAll = 0;
+        RF_Reciever::dataRecieved[0] = 0;
+        RF_Reciever::dataRecieved[1] = 0;
+        RF_Reciever::dataRecieved[2] = 0;
+
+        RF_Reciever::t_properties.setAll = 0;
+        RF_Reciever::t_bitCounter = 0;
       }
 
     } else {
-      RF_Reciever::startBitCounter = 0;
+      RF_Reciever::t_bitCounter = 0;
     }
   }
 }
@@ -196,30 +153,120 @@ void RF_Reciever::recieve() {
   const long currentTime = micros();
   const uint16_t timeSinceLastPeak = currentTime - RF_Reciever::lastPeak;
 
-  if (!RF_Reciever::startSignalRecieved) {
+  if (!RF_Reciever::t_progress.hasStartSignal) {
     RF_Reciever::processingStartSignal(timeSinceLastPeak);
   } else {
-    // Middle of tranmission
-    RF_Reciever::dataRecieved[RF_Reciever::positionInArray++] = timeSinceLastPeak;
-    if (RF_Reciever::isEndSignal(timeSinceLastPeak)) {
-      ++RF_Reciever::transmissionPartCounter;
-      if (RF_Reciever::transmissionPartCounter == 3) {
-        // Message Recieved
-        RF_Reciever::startSignalRecieved = false;
-        RF_Reciever::transmissionPartCounter = 0;
-        RF_Reciever::startBitCounter = 0;
-        RF_Reciever::processByteRecieved();
-        RF_Reciever::positionInArray = 0; // Reset stack
+    const int peakLength = timeSinceLastPeak / transmit_time;
+
+    if (peakLength >= 6 && digitalRead(recievePin) == LOW) {
+      // Is End Peak
+      ++RF_Reciever::t_properties.transmissionPartCounter;
+      RF_Reciever::t_progress.hasSeperator = true;
+      RF_Reciever::t_bitCounter = 0;
+    } else {
+      if (peakLength >= 2) {
+        if (RF_Reciever::t_bitCounter == 0 && RF_Reciever::t_progress.hasSeperator) {
+          //Message started low and went high
+          RF_Reciever::t_progress.hasSeperator = false;
+          RF_Reciever::t_progress.innerPeak = false;
+          RF_Reciever::t_progress.isBitOne = true;
+        } else {
+          RF_Reciever::t_progress.isBitOne = !RF_Reciever::t_progress.isBitOne;
+        }
+      } else {
+        // Same type of bit
+        if (RF_Reciever::t_bitCounter == 0 && RF_Reciever::t_progress.hasSeperator) {
+          //Message started high and went low
+          RF_Reciever::t_progress.hasSeperator = false;
+          RF_Reciever::t_progress.innerPeak = true;
+          RF_Reciever::t_progress.isBitOne = false;
+        } else {
+          RF_Reciever::t_progress.innerPeak = !RF_Reciever::t_progress.innerPeak;
+        }
       }
+
+      if (!RF_Reciever::t_progress.innerPeak) {
+        if (!RF_Reciever::t_progress.hasReliability) {
+          decodeReliability();
+        } else if (!RF_Reciever::t_progress.hasDataType) {
+          decodeDataType();
+        } else if (RF_Reciever::t_progress.hasDataType) {
+          decodeDataSegment();
+        }
+      }
+
     }
   }
 
-  if (RF_Reciever::positionInArray >= 35) {
-    RF_Reciever::startSignalRecieved = false;
-    RF_Reciever::transmissionPartCounter = 0;
-    RF_Reciever::startBitCounter = 0;
-    RF_Reciever::positionInArray = 0;
+  RF_Reciever::lastPeak = currentTime;
+}
+
+void RF_Reciever::decodeReliability() {
+
+  if (RF_Reciever::t_progress.isBitOne) {
+    RF_Reciever::t_properties.reliability |= 1 << (1 - RF_Reciever::t_bitCounter);
   }
 
-  RF_Reciever::lastPeak = currentTime;
+  ++RF_Reciever::t_bitCounter;
+
+  if (RF_Reciever::t_bitCounter >= 2) {
+    RF_Reciever::t_progress.hasReliability = true;
+    RF_Reciever::t_bitCounter = 0;
+  }
+
+}
+
+void RF_Reciever::decodeDataType() {
+  
+  if (RF_Reciever::t_progress.isBitOne) {
+    RF_Reciever::t_properties.data_type |= 1 << (1 - RF_Reciever::t_bitCounter);
+  }
+
+  ++RF_Reciever::t_bitCounter;
+
+  if (RF_Reciever::t_bitCounter >= 2) {
+    RF_Reciever::t_progress.hasDataType = true;
+    RF_Reciever::t_bitCounter = 0;
+  }
+
+}
+
+void RF_Reciever::decodeDataSegment() {
+  switch (RF_Reciever::t_properties.data_type) {
+    case data_byte:
+      if (RF_Reciever::t_progress.isBitOne) {
+        RF_Reciever::dataRecieved[RF_Reciever::t_properties.transmissionPartCounter] |= 1 << (7 - RF_Reciever::t_bitCounter);
+      }
+      break;
+    case data_int:
+      if (RF_Reciever::t_progress.isBitOne) {
+        RF_Reciever::dataRecieved[RF_Reciever::t_properties.transmissionPartCounter] |= 1 << (15 - RF_Reciever::t_bitCounter);
+      }
+      break;
+    case data_long:
+      if (RF_Reciever::t_progress.isBitOne) {
+        RF_Reciever::dataRecieved[RF_Reciever::t_properties.transmissionPartCounter] |= 1 << (31 - RF_Reciever::t_bitCounter);
+      }
+      break;
+    default:
+      break;
+  }
+
+  ++RF_Reciever::t_bitCounter;
+
+  if (RF_Reciever::t_properties.reliability == t_unsafe ||
+    (RF_Reciever::t_properties.reliability == t_safe && RF_Reciever::t_properties.transmissionPartCounter >= 3)) {
+
+    if (!hasIntegrity()) {
+      RF_Reciever::d_properties.hasData = false;
+    } else {
+      RF_Reciever::d_properties.hasData = true;
+      RF_Reciever::d_properties.data_type = RF_Reciever::t_properties.data_type;
+    }
+
+    RF_Reciever::t_progress.setAll = 0;
+    RF_Reciever::t_properties.setAll = 0;
+    RF_Reciever::t_bitCounter = 0;
+  }
+
 }
